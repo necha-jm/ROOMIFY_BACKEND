@@ -17,4 +17,4 @@ RUN ./mvnw clean package -DskipTests
 EXPOSE 8080
 
 # Run JAR file
-CMD ["java", "-jar", "target/roomify-0.0.1-SNAPSHOT.jar"]
+CMD ["java", "-jar", "target/Roomify-0.0.1-SNAPSHOT.jar"]
