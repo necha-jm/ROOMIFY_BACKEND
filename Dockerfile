@@ -1,17 +1,16 @@
-# Use Java 17 as base
-FROM eclipse-temurin:17-jdk-alpine
+# Use Debian-based Java 17 image
+FROM eclipse-temurin:17-jdk
 
-# Set working directory
 WORKDIR /app
 
-# Copy project files
-COPY src/main/java/com/ROOMIFY/Roomify .
+COPY . .
 
-# Build the project using Maven Wrapper
+# Make mvnw executable inside Docker
+RUN chmod +x mvnw
+
+# Build project
 RUN ./mvnw clean package -DskipTests
 
-# Expose the port your Spring Boot app will run on
 EXPOSE 8080
 
-# Run the JAR file
 CMD ["java", "-jar", "target/roomify-0.0.1-SNAPSHOT.jar"]
