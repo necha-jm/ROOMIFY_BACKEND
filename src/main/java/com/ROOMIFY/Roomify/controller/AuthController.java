@@ -6,9 +6,11 @@ import com.ROOMIFY.Roomify.dto.RegisterRequest;
 import com.ROOMIFY.Roomify.model.User;
 import com.ROOMIFY.Roomify.model.UserRole;
 import com.ROOMIFY.Roomify.repository.UserRepository;
+import com.ROOMIFY.Roomify.service.JwtService;
 import com.ROOMIFY.Roomify.service.UserService;
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
+import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.jackson2.JacksonFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,108 +45,95 @@ public class AuthController {
 
     @PostMapping("/google")
     @Transactional
-    public ResponseEntity<Map<String, Object>> googleLogin(@RequestBody Map<String, String> request) {
+    public ResponseEntity<?> googleLogin(@RequestBody Map<String, String> request) {
+
         Map<String, Object> response = new HashMap<>();
 
         try {
+            // 🔹 1. Get token from request
             String idTokenString = request.get("idToken");
-            String selectedRole = request.get("role");
 
-            // Verify Google token
+            if (idTokenString == null || idTokenString.isEmpty()) {
+                response.put("success", false);
+                response.put("message", "Missing Google ID token");
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            System.out.println("Received Google token length: " + idTokenString.length());
+
+            // 🔹 2. Build verifier (FIXED for Render)
             GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(
-                    new NetHttpTransport(),
-                    JacksonFactory.getDefaultInstance())
+                    GoogleNetHttpTransport.newTrustedTransport(),   // ✅ FIXED
+                    JacksonFactory.getDefaultInstance()
+            )
                     .setAudience(Collections.singletonList(googleClientId))
                     .build();
 
-            GoogleIdToken idToken = verifier.verify(idTokenString);
+            // 🔹 3. Verify token (SAFE BLOCK)
+            GoogleIdToken idToken;
 
+            try {
+                idToken = verifier.verify(idTokenString);
+            } catch (Exception e) {
+                e.printStackTrace();
+
+                response.put("success", false);
+                response.put("message", "Google verification failed: " + e.getMessage());
+
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
+
+            // 🔹 4. Check if token is valid
             if (idToken == null) {
                 response.put("success", false);
                 response.put("message", "Invalid Google token");
+
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
             }
 
+            // 🔹 5. Extract user info
             GoogleIdToken.Payload payload = idToken.getPayload();
+
             String email = payload.getEmail();
             String name = (String) payload.get("name");
-            String googleId = payload.getSubject();
+            String picture = (String) payload.get("picture");
 
-            // Convert role to enum
-            UserRole userRole = null;
-            if (selectedRole != null && !selectedRole.isEmpty()) {
-                try {
-                    userRole = UserRole.valueOf(selectedRole.toUpperCase());
-                } catch (IllegalArgumentException e) {
-                    response.put("success", false);
-                    response.put("message", "Invalid role: " + selectedRole);
-                    return ResponseEntity.badRequest().body(response);
-                }
-            }
+            System.out.println("Google user: " + email);
 
-            // Check if user exists
-            Optional<User> userOptional = userRepository.findByEmail(email);
+            // 🔹 6. Check if user exists
+            Optional<User> optionalUser = userRepository.findByEmail(email);
             User user;
-            boolean isNewUser = false;
 
-            if (userOptional.isEmpty()) {
-                // Create new user
+            if (optionalUser.isPresent()) {
+                user = optionalUser.get();
+            } else {
+                // 🔹 7. Create new user
                 user = new User();
                 user.setEmail(email);
                 user.setName(name);
-                user.setRole(userRole != null ? userRole : UserRole.TENANT);
-                user.setEmailVerified(true);
-                user.setPassword(passwordEncoder.encode(UUID.randomUUID().toString()));
-                user.setFirebaseUid(googleId);
-                user.setCreatedAt(LocalDateTime.now());
-                user.setLastLoginAt(LocalDateTime.now());
-                isNewUser = true;
-            } else {
-                user = userOptional.get();
-
-                // Verify role matches if selected
-                if (userRole != null && !user.getRole().equals(userRole)) {
-                    response.put("success", false);
-                    response.put("message", "You selected " + selectedRole + " but your account is registered as " + user.getRole().toString().toLowerCase());
-                    return ResponseEntity.status(HttpStatus.FORBIDDEN).body(response);
-                }
-
-                // Update existing user
-                user.setLastLoginAt(LocalDateTime.now());
-                if (user.getFirebaseUid() == null) {
-                    user.setFirebaseUid(googleId);
-                }
+                userRepository.save(user);
             }
 
-            // SINGLE SAVE operation
-            User savedUser = userRepository.save(user);
+            // 🔹 8. Generate JWT
+            String jwtToken = JwtService.generateToken(String.valueOf(user));
 
-            // Generate JWT token
-            String token = jwtUtil.generateToken(savedUser.getEmail());
-
-            // Prepare response
-            Map<String, Object> userData = new HashMap<>();
-            userData.put("id", savedUser.getId());
-            userData.put("email", savedUser.getEmail());
-            userData.put("name", savedUser.getName());
-            userData.put("role", savedUser.getRole().toString().toLowerCase());
-            userData.put("emailVerified", savedUser.isEmailVerified());
-
+            // 🔹 9. Success response
             response.put("success", true);
-            response.put("message", isNewUser ? "Account created successfully" : "Login successful");
-            response.put("token", token);
-            response.put("user", userData);
+            response.put("token", jwtToken);
+            response.put("user", user);
 
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
+            // 🔥 FINAL CATCH (prevents 500 crash)
             e.printStackTrace();
+
             response.put("success", false);
-            response.put("message", "Google login failed: " + e.getMessage());
+            response.put("message", "Server error: " + e.getMessage());
+
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
     }
-
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> registerUser(@RequestBody RegisterRequest request) {
         try {
