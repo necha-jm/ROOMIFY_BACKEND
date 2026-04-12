@@ -64,19 +64,8 @@
             <artifactId>google-api-client</artifactId>
             <version>${google.api.version}</version>
         </dependency>
-        <dependency>
-            <groupId>com.google.api-client</groupId>
-            <artifactId>google-api-client-jackson2</artifactId>
-            <version>${google.api.version}</version>
-        </dependency>
 
 
-        <!-- Firebase Admin SDK for sending notifications -->
-        <dependency>
-            <groupId>com.google.firebase</groupId>
-            <artifactId>firebase-admin</artifactId>
-            <version>9.2.0</version>
-        </dependency>
 
         <!-- For FCM HTTP v1 API -->
         <dependency>
@@ -118,6 +107,8 @@
             <artifactId>firebase-admin</artifactId>
             <version>9.2.0</version>
         </dependency>
+
+
 
         <!-- Test -->
         <dependency>
