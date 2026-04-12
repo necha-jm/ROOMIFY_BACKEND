@@ -18,7 +18,7 @@ public class BookingResponseDTO {
     private Integer numberOfGuests;
     private String specialRequests;
 
-    // Getters and Setters
+    // Getters and setters for ALL fields
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
