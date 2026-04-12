@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -64,7 +65,6 @@ public class BookingController {
 
             Booking savedBooking = bookingRepository.save(booking);
 
-            // Convert to DTO
             BookingResponseDTO responseDTO = convertToDTO(savedBooking);
 
             return ResponseEntity.ok(new ApiResponse<>(true, responseDTO, "Booking created successfully"));
@@ -76,13 +76,11 @@ public class BookingController {
         }
     }
 
-    // FIXED: GET endpoint for user bookings - NOW USING DTO
     @GetMapping("/user/{userId}")
     public ResponseEntity<ApiResponse<List<BookingResponseDTO>>> getUserBookings(@PathVariable Long userId) {
         try {
             List<Booking> bookings = bookingRepository.findByUserId(userId);
 
-            // Convert to DTOs to avoid recursion
             List<BookingResponseDTO> dtos = bookings.stream()
                     .map(this::convertToDTO)
                     .collect(Collectors.toList());
@@ -94,27 +92,31 @@ public class BookingController {
         }
     }
 
-    // FIXED: GET endpoint for owner bookings - NOW USING DTO
     @GetMapping("/owner/{ownerId}")
     public ResponseEntity<ApiResponse<List<BookingResponseDTO>>> getOwnerBookings(@PathVariable Long ownerId) {
         try {
-            // Find all rooms owned by this owner
-            List<Room> rooms = roomRepository.findByOwnerId(ownerId);
+            // Use findByPostedBy - this is the correct method for your Room entity
+            List<Room> rooms = roomRepository.findByPostedBy(ownerId);
 
-            // Collect all bookings for those rooms
-            List<BookingResponseDTO> allBookings = rooms.stream()
-                    .flatMap(room -> bookingRepository.findByRoomId(room.getId()).stream())
-                    .map(this::convertToDTO)
-                    .collect(Collectors.toList());
+            List<BookingResponseDTO> allBookings = new ArrayList<>();
+
+            if (rooms != null && !rooms.isEmpty()) {
+                for (Room room : rooms) {
+                    List<Booking> roomBookings = bookingRepository.findByRoomId(room.getId());
+                    for (Booking booking : roomBookings) {
+                        allBookings.add(convertToDTO(booking));
+                    }
+                }
+            }
 
             return ResponseEntity.ok(new ApiResponse<>(true, allBookings, "Bookings retrieved successfully"));
         } catch (Exception e) {
+            e.printStackTrace();
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new ApiResponse<>(false, null, "Failed to retrieve bookings: " + e.getMessage()));
         }
     }
 
-    // GET endpoint to check if user has booking for a room
     @GetMapping("/user/{userId}/room/{roomId}")
     public ResponseEntity<ApiResponse<List<BookingResponseDTO>>> checkUserBooking(
             @PathVariable Long userId,
@@ -122,18 +124,16 @@ public class BookingController {
         try {
             List<Booking> bookings = bookingRepository.findByUserIdAndRoomId(userId, roomId);
 
-            // Convert to DTOs
             List<BookingResponseDTO> dtos = bookings.stream()
                     .map(this::convertToDTO)
                     .collect(Collectors.toList());
 
             return ResponseEntity.ok(new ApiResponse<>(true, dtos, "Check completed"));
         } catch (Exception e) {
-            return ResponseEntity.ok(new ApiResponse<>(true, new java.util.ArrayList<>(), "No bookings found"));
+            return ResponseEntity.ok(new ApiResponse<>(true, new ArrayList<>(), "No bookings found"));
         }
     }
 
-    // PUT endpoint to accept booking
     @PutMapping("/{bookingId}/accept")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> acceptBooking(@PathVariable Long bookingId) {
         try {
@@ -152,7 +152,6 @@ public class BookingController {
         }
     }
 
-    // PUT endpoint to reject booking
     @PutMapping("/{bookingId}/reject")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> rejectBooking(@PathVariable Long bookingId) {
         try {
@@ -171,7 +170,6 @@ public class BookingController {
         }
     }
 
-    // PUT endpoint to cancel booking
     @PutMapping("/{bookingId}/cancel")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> cancelBooking(@PathVariable Long bookingId) {
         try {
@@ -190,7 +188,6 @@ public class BookingController {
         }
     }
 
-    // DELETE endpoint to delete booking
     @DeleteMapping("/{bookingId}")
     public ResponseEntity<ApiResponse<Void>> deleteBooking(@PathVariable Long bookingId) {
         try {
@@ -202,7 +199,6 @@ public class BookingController {
         }
     }
 
-    // Helper method to convert Booking entity to BookingResponseDTO
     private BookingResponseDTO convertToDTO(Booking booking) {
         BookingResponseDTO dto = new BookingResponseDTO();
 
@@ -215,7 +211,6 @@ public class BookingController {
         dto.setNumberOfGuests(booking.getNumberOfGuests());
         dto.setSpecialRequests(booking.getSpecialRequests());
 
-        // Set user info (flattened, no recursion)
         User user = booking.getUser();
         if (user != null) {
             dto.setUserId(user.getId());
@@ -223,7 +218,6 @@ public class BookingController {
             dto.setUserEmail(user.getEmail());
         }
 
-        // Set room info
         Room room = booking.getRoom();
         if (room != null) {
             dto.setRoomId(room.getId());

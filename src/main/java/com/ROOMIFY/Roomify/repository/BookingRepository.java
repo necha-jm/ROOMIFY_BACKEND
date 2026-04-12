@@ -1,7 +1,6 @@
 package com.ROOMIFY.Roomify.repository;
 
 import com.ROOMIFY.Roomify.model.Booking;
-import com.ROOMIFY.Roomify.model.Room;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -17,6 +16,5 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
     @Query("SELECT b FROM Booking b WHERE b.room.postedBy = :ownerId")
     List<Booking> findByRoomPostedBy(@Param("ownerId") Long ownerId);
 
-    List<Booking> findByRoomId(Long roomId);  // ADD THIS METHOD
-
+    List<Booking> findByRoomId(Long roomId);
 }
