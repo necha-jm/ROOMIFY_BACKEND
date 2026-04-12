@@ -49,76 +49,92 @@ public class AuthController {
     @Transactional
     public ResponseEntity<?> googleLogin(@RequestBody Map<String, String> request) {
 
-        Map<String, Object> response = new HashMap<>();
-
         try {
 
-            // 1. Get Firebase ID token from request
+            // 1. Get token
             String idTokenString = request.get("idToken");
 
             if (idTokenString == null || idTokenString.isEmpty()) {
                 return ResponseEntity.badRequest().body(
-                        Map.of("success", false, "message", "Missing Firebase ID token")
+                        Map.of("success", false, "message", "Missing Google ID token")
                 );
             }
 
-            System.out.println("Received Firebase token length: " + idTokenString.length());
+            // 2. Build Google verifier
+            GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(
+                    GoogleNetHttpTransport.newTrustedTransport(),
+                    JacksonFactory.getDefaultInstance()
+            )
+                    .setAudience(Collections.singletonList(googleClientId))
+                    .build();
 
-            // 2. VERIFY TOKEN USING FIREBASE (NOT GOOGLE VERIFIER)
-            FirebaseToken decodedToken;
+            // 3. Verify token
+            GoogleIdToken idToken = verifier.verify(idTokenString);
 
-            try {
-                decodedToken = FirebaseAuth.getInstance().verifyIdToken(idTokenString);
-            } catch (Exception e) {
-                e.printStackTrace();
+            if (idToken == null) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
-                        Map.of("success", false, "message", "Invalid Firebase token")
+                        Map.of("success", false, "message", "Invalid Google token")
                 );
             }
 
-            // 3. Extract user info from Firebase token
-            String email = decodedToken.getEmail();
-            String uid = decodedToken.getUid();
-            String name = decodedToken.getName();
+            // 4. Extract user info
+            GoogleIdToken.Payload payload = idToken.getPayload();
 
-            System.out.println("Firebase user: " + email);
+            String email = payload.getEmail();
+            String name = (String) payload.get("name");
+            String picture = (String) payload.get("picture");
 
             if (email == null) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
-                        Map.of("success", false, "message", "Email not found in token")
+                        Map.of("success", false, "message", "Email not found in Google token")
                 );
             }
 
-            // 4. Find or create user
+            // 5. Get role safely (IMPORTANT FIX)
+            String role = request.get("role");
+            UserRole userRole;
+
+            try {
+                userRole = (role != null)
+                        ? UserRole.valueOf(role.toUpperCase())
+                        : UserRole.TENANT;
+            } catch (Exception e) {
+                userRole = UserRole.TENANT;
+            }
+
+            // 6. Find or create user
+            UserRole finalUserRole = userRole;
             User user = userRepository.findByEmail(email).orElseGet(() -> {
                 User newUser = new User();
                 newUser.setEmail(email);
-                newUser.setName(name != null ? name : "Firebase User");
-                newUser.setRole(UserRole.USER); // default role
-                newUser.setCreatedAt(LocalDateTime.now());
+                newUser.setName(name != null ? name : "Google User");
+                newUser.setRole(finalUserRole);
                 newUser.setEmailVerified(true);
+                newUser.setCreatedAt(LocalDateTime.now());
                 return userRepository.save(newUser);
             });
 
-            // 5. Update last login
+            // 7. Update last login
             user.setLastLoginAt(LocalDateTime.now());
             userRepository.save(user);
 
-            // 6. Generate JWT (your own system token)
+            // 8. Generate JWT
             String jwtToken = jwtUtil.generateToken(user.getEmail());
 
-            // 7. Response
+            // 9. Response
             Map<String, Object> userData = new HashMap<>();
             userData.put("id", user.getId());
             userData.put("email", user.getEmail());
             userData.put("name", user.getName());
             userData.put("role", user.getRole().toString().toLowerCase());
 
-            response.put("success", true);
-            response.put("token", jwtToken);
-            response.put("user", userData);
-
-            return ResponseEntity.ok(response);
+            return ResponseEntity.ok(
+                    Map.of(
+                            "success", true,
+                            "token", jwtToken,
+                            "user", userData
+                    )
+            );
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -131,6 +147,7 @@ public class AuthController {
             );
         }
     }
+
 
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> registerUser(@RequestBody RegisterRequest request) {
