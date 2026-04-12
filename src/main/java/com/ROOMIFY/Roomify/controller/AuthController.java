@@ -50,48 +50,45 @@ public class AuthController {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            // 🔹 1. Get token from request
+
+            // 1. Get ID token from request
             String idTokenString = request.get("idToken");
 
             if (idTokenString == null || idTokenString.isEmpty()) {
-                response.put("success", false);
-                response.put("message", "Missing Google ID token");
-                return ResponseEntity.badRequest().body(response);
+                return ResponseEntity.badRequest().body(
+                        Map.of("success", false, "message", "Missing Google ID token")
+                );
             }
 
             System.out.println("Received Google token length: " + idTokenString.length());
 
-            // 🔹 2. Build verifier (FIXED for Render)
+            // 2. Build verifier (IMPORTANT: uses WEB CLIENT ID)
             GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(
-                    GoogleNetHttpTransport.newTrustedTransport(),   // ✅ FIXED
+                    GoogleNetHttpTransport.newTrustedTransport(),
                     JacksonFactory.getDefaultInstance()
             )
                     .setAudience(Collections.singletonList(googleClientId))
                     .build();
 
-            // 🔹 3. Verify token (SAFE BLOCK)
+            // 3. Verify token safely
             GoogleIdToken idToken;
-
             try {
                 idToken = verifier.verify(idTokenString);
             } catch (Exception e) {
                 e.printStackTrace();
-
-                response.put("success", false);
-                response.put("message", "Google verification failed: " + e.getMessage());
-
-                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
+                        Map.of("success", false, "message", "Google verification failed")
+                );
             }
 
-            // 🔹 4. Check if token is valid
+            // 4. Check if token is valid
             if (idToken == null) {
-                response.put("success", false);
-                response.put("message", "Invalid Google token");
-
-                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
+                        Map.of("success", false, "message", "Invalid Google token")
+                );
             }
 
-            // 🔹 5. Extract user info
+            // 5. Extract user info
             GoogleIdToken.Payload payload = idToken.getPayload();
 
             String email = payload.getEmail();
@@ -100,40 +97,50 @@ public class AuthController {
 
             System.out.println("Google user: " + email);
 
-            // 🔹 6. Check if user exists
-            Optional<User> optionalUser = userRepository.findByEmail(email);
-            User user;
+            // 6. Find or create user
+            User user = userRepository.findByEmail(email).orElseGet(() -> {
+                User newUser = new User();
+                newUser.setEmail(email);
+                newUser.setName(name != null ? name : "Google User");
+                newUser.setRole(UserRole.USER); // IMPORTANT FIX
+                newUser.setCreatedAt(LocalDateTime.now());
+                newUser.setEmailVerified(true);
+                return userRepository.save(newUser);
+            });
 
-            if (optionalUser.isPresent()) {
-                user = optionalUser.get();
-            } else {
-                // 🔹 7. Create new user
-                user = new User();
-                user.setEmail(email);
-                user.setName(name);
-                userRepository.save(user);
-            }
+            // 7. Update last login
+            user.setLastLoginAt(LocalDateTime.now());
+            userRepository.save(user);
 
-            // 🔹 8. Generate JWT
-            String jwtToken = JwtService.generateToken(String.valueOf(user));
+            // 8. Generate JWT (FIXED)
+            String jwtToken = jwtUtil.generateToken(user.getEmail());
 
-            // 🔹 9. Success response
+            // 9. Response
+            Map<String, Object> userData = new HashMap<>();
+            userData.put("id", user.getId());
+            userData.put("email", user.getEmail());
+            userData.put("name", user.getName());
+            userData.put("role", user.getRole().toString().toLowerCase());
+            userData.put("picture", picture);
+
             response.put("success", true);
             response.put("token", jwtToken);
-            response.put("user", user);
+            response.put("user", userData);
 
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            // 🔥 FINAL CATCH (prevents 500 crash)
             e.printStackTrace();
 
-            response.put("success", false);
-            response.put("message", "Server error: " + e.getMessage());
-
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
+                    Map.of(
+                            "success", false,
+                            "message", "Server error: " + e.getMessage()
+                    )
+            );
         }
     }
+
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> registerUser(@RequestBody RegisterRequest request) {
         try {
