@@ -44,31 +44,26 @@ public class AuthController {
 
     @Value("${google.client.id:}")
     private String googleClientId;
-
     @PostMapping("/google")
     @Transactional
     public ResponseEntity<?> googleLogin(@RequestBody Map<String, String> request) {
 
         try {
-
-            // 1. Get token
             String idTokenString = request.get("idToken");
 
-            if (idTokenString == null || idTokenString.isEmpty()) {
+            if (idTokenString == null || idTokenString.isBlank()) {
                 return ResponseEntity.badRequest().body(
                         Map.of("success", false, "message", "Missing Google ID token")
                 );
             }
 
-            // 2. Build Google verifier
             GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(
                     GoogleNetHttpTransport.newTrustedTransport(),
                     JacksonFactory.getDefaultInstance()
             )
-                    .setAudience(Collections.singletonList(googleClientId))
+                    .setAudience(Collections.singletonList(googleClientId)) // MUST MATCH WEB CLIENT ID
                     .build();
 
-            // 3. Verify token
             GoogleIdToken idToken = verifier.verify(idTokenString);
 
             if (idToken == null) {
@@ -77,64 +72,44 @@ public class AuthController {
                 );
             }
 
-            // 4. Extract user info
             GoogleIdToken.Payload payload = idToken.getPayload();
 
             String email = payload.getEmail();
             String name = (String) payload.get("name");
-            String picture = (String) payload.get("picture");
 
-            if (email == null) {
-                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
+            if (email == null || email.isBlank()) {
+                return ResponseEntity.badRequest().body(
                         Map.of("success", false, "message", "Email not found in Google token")
                 );
             }
 
-            // 5. Get role safely (IMPORTANT FIX)
-            String role = request.get("role");
-            UserRole userRole;
+            User user = userRepository.findByEmail(email)
+                    .orElseGet(() -> {
+                        User newUser = new User();
+                        newUser.setEmail(email);
+                        newUser.setName(name != null ? name : "Google User");
+                        newUser.setRole(UserRole.USER);
+                        newUser.setCreatedAt(LocalDateTime.now());
+                        newUser.setEmailVerified(true);
+                        return userRepository.save(newUser);
+                    });
 
-            try {
-                userRole = (role != null)
-                        ? UserRole.valueOf(role.toUpperCase())
-                        : UserRole.TENANT;
-            } catch (Exception e) {
-                userRole = UserRole.TENANT;
-            }
-
-            // 6. Find or create user
-            UserRole finalUserRole = userRole;
-            User user = userRepository.findByEmail(email).orElseGet(() -> {
-                User newUser = new User();
-                newUser.setEmail(email);
-                newUser.setName(name != null ? name : "Google User");
-                newUser.setRole(finalUserRole);
-                newUser.setEmailVerified(true);
-                newUser.setCreatedAt(LocalDateTime.now());
-                return userRepository.save(newUser);
-            });
-
-            // 7. Update last login
             user.setLastLoginAt(LocalDateTime.now());
-            userRepository.save(user);
+            user = userRepository.save(user);
 
-            // 8. Generate JWT
-            String jwtToken = jwtUtil.generateToken(user.getEmail());
+            String jwt = jwtUtil.generateToken(user.getEmail());
 
-            // 9. Response
             Map<String, Object> userData = new HashMap<>();
             userData.put("id", user.getId());
             userData.put("email", user.getEmail());
             userData.put("name", user.getName());
-            userData.put("role", user.getRole().toString().toLowerCase());
+            userData.put("role", user.getRole().name().toLowerCase());
 
-            return ResponseEntity.ok(
-                    Map.of(
-                            "success", true,
-                            "token", jwtToken,
-                            "user", userData
-                    )
-            );
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "token", jwt,
+                    "user", userData
+            ));
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -142,7 +117,7 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
                     Map.of(
                             "success", false,
-                            "message", "Server error: " + e.getMessage()
+                            "message", "Google login failed: " + e.getMessage()
                     )
             );
         }
