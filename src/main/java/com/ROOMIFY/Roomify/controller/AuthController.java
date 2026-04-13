@@ -1,6 +1,7 @@
 package com.ROOMIFY.Roomify.controller;
 
 import com.ROOMIFY.Roomify.Component.JwtUtil;
+import com.ROOMIFY.Roomify.dto.ApiResponse;
 import com.ROOMIFY.Roomify.dto.AuthResponse;
 import com.ROOMIFY.Roomify.dto.RegisterRequest;
 import com.ROOMIFY.Roomify.model.User;
@@ -120,6 +121,26 @@ public class AuthController {
                             "message", "Google login failed: " + e.getMessage()
                     )
             );
+        }
+    }
+
+    @PostMapping("/api/auth/save-fcm-token")
+    public ResponseEntity<ApiResponse<Void>> saveFcmToken(
+            @RequestParam Long userId,
+            @RequestParam String fcmToken) {
+        try {
+            User user = userRepository.findById(userId).orElse(null);
+            if (user != null) {
+                user.setFcmToken(fcmToken);
+                userRepository.save(user);
+                System.out.println("✅ FCM token saved for user: " + user.getEmail());
+                return ResponseEntity.ok(new ApiResponse<>(true, null, "FCM token saved"));
+            }
+            return ResponseEntity.badRequest().body(new ApiResponse<>(false, null, "User not found"));
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, null, "Error saving token: " + e.getMessage()));
         }
     }
 

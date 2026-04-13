@@ -108,6 +108,12 @@
             <version>9.2.0</version>
         </dependency>
 
+        <!-- For HTTP requests -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+
 
 
         <!-- Test -->

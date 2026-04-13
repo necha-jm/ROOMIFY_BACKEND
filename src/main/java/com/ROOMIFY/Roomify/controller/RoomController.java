@@ -3,6 +3,7 @@ package com.ROOMIFY.Roomify.controller;
 import com.ROOMIFY.Roomify.dto.ApiResponse;
 import com.ROOMIFY.Roomify.model.Room;
 import com.ROOMIFY.Roomify.repository.RoomRepository;
+import com.ROOMIFY.Roomify.service.FCMService;
 import com.ROOMIFY.Roomify.service.RoomNotifier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,6 +32,9 @@ public class RoomController {
     private RoomRepository repo;
 
     @Autowired
+    private NotificationController notificationController;  // ADD THIS - Fix missing injection
+
+    @Autowired
     private RoomNotifier notifier;
 
     @Value("${file.upload.dir:uploads}")
@@ -41,16 +45,35 @@ public class RoomController {
     @Transactional
     public ResponseEntity<Room> addRoom(@RequestBody Room room) {
         try {
-            room.setId(null);
-            if (room.getCreatedAt() == null) room.setCreatedAt(LocalDateTime.now());
-            if (room.getStatus() == null || room.getStatus().isEmpty()) room.setStatus("active");
-            if (room.getRoomsCount() <= 0) room.setRoomsCount(1);
-            if (room.getBathroomsCount() <= 0) room.setBathroomsCount(1);
-            if (room.getImages() != null) room.setImageCount(room.getImages().size());
+            // Set default values
+            if (room.getCreatedAt() == null) {
+                room.setCreatedAt(LocalDateTime.now());
+            }
+            if (room.getStatus() == null || room.getStatus().isEmpty()) {
+                room.setStatus("active");
+            }
+            if (room.getRoomsCount() <= 0) {
+                room.setRoomsCount(1);
+            }
+            if (room.getBathroomsCount() <= 0) {
+                room.setBathroomsCount(1);
+            }
+            if (room.getImages() != null) {
+                room.setImageCount(room.getImages().size());
+            }
             room.setAvailable(true);
 
             Room saved = repo.save(room);
-            notifier.notifyRoomUpdate(saved);
+
+            // Send notification about new room (only if notificationController is available)
+            if (notificationController != null) {
+                try {
+                    notificationController.sendRoomNotification(saved.getId());
+                } catch (Exception e) {
+                    System.err.println("Failed to send notification: " + e.getMessage());
+                }
+            }
+
             return ResponseEntity.ok(saved);
         } catch (Exception e) {
             e.printStackTrace();

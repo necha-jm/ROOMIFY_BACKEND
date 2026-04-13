@@ -47,6 +47,9 @@ public class User {
     @OneToMany(mappedBy = "user")
     private List<Booking> bookings;
 
+    @Column(name = "fcm_token", length = 500)
+    private String fcmToken;
+
     public User() {}
 
     public User(String name, String email, String password, UserRole role) {
