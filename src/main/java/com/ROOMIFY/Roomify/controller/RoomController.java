@@ -43,41 +43,61 @@ public class RoomController {
     // Create a new room
     @PostMapping
     @Transactional
-    public ResponseEntity<Room> addRoom(@RequestBody Room room) {
+    public ResponseEntity<?> addRoom(@RequestBody Room room) {
         try {
-            // Set default values
+
+            // 🔐 SAFETY CHECK
+            if (room == null) {
+                return ResponseEntity.badRequest().body("Room is null");
+            }
+
+            // ================= DEFAULT VALUES =================
             if (room.getCreatedAt() == null) {
                 room.setCreatedAt(LocalDateTime.now());
             }
+
             if (room.getStatus() == null || room.getStatus().isEmpty()) {
                 room.setStatus("active");
             }
+
             if (room.getRoomsCount() <= 0) {
                 room.setRoomsCount(1);
             }
+
             if (room.getBathroomsCount() <= 0) {
                 room.setBathroomsCount(1);
             }
-            if (room.getImages() != null) {
-                room.setImageCount(room.getImages().size());
+
+            if (room.getAmenities() == null) {
+                room.setAmenities(new ArrayList<>());
             }
+
+            if (room.getRules() == null) {
+                room.setRules(new ArrayList<>());
+            }
+
+            if (room.getImages() == null) {
+                room.setImages(new ArrayList<>());
+            }
+
+            if (room.getPostedBy() == null) {
+                return ResponseEntity
+                        .status(HttpStatus.BAD_REQUEST)
+                        .body("postedBy is required");
+            }
+
             room.setAvailable(true);
 
+            // ================= SAVE =================
             Room saved = repo.save(room);
 
-            // Send notification about new room (only if notificationController is available)
-            if (notificationController != null) {
-                try {
-                    notificationController.sendRoomNotification(saved.getId());
-                } catch (Exception e) {
-                    System.err.println("Failed to send notification: " + e.getMessage());
-                }
-            }
-
             return ResponseEntity.ok(saved);
+
         } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
+            e.printStackTrace(); // 🔥 THIS WILL SHOW REAL ERROR IN LOGCAT
+            return ResponseEntity
+                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(e.getMessage());
         }
     }
 
