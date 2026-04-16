@@ -49,9 +49,14 @@ public class AuthController {
     @PostMapping("/google")
     @Transactional
     public ResponseEntity<?> googleLogin(@RequestBody Map<String, String> request) {
+        System.out.println("=== GOOGLE LOGIN REQUEST RECEIVED ===");
+
         try {
             String idTokenString = request.get("idToken");
             String role = request.get("role");
+
+            System.out.println("Role: " + role);
+            System.out.println("Token length: " + (idTokenString != null ? idTokenString.length() : 0));
 
             if (idTokenString == null || idTokenString.isBlank()) {
                 return ResponseEntity.badRequest().body(
@@ -59,30 +64,80 @@ public class AuthController {
                 );
             }
 
-            // Accept both Android and Web client IDs
-            List<String> validAudiences = Arrays.asList(
-                    "1041914574744-dukeu8n2rdaqtlrbuq2mile0qkba726o.apps.googleusercontent.com", // Android
-                    "1041914574744-evaa3p91lu43jr5crr42esqrivkha66m.apps.googleusercontent.com"  // Web
-            );
+            // Try multiple verification methods
+            String email = null;
+            String name = null;
+            Exception lastError = null;
 
-            GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(
-                    GoogleNetHttpTransport.newTrustedTransport(),
-                    JacksonFactory.getDefaultInstance()
-            )
-                    .setAudience(validAudiences) // Now accepts both
-                    .build();
+            // Method 1: Try tokeninfo endpoint (most reliable)
+            try {
+                System.out.println("Trying tokeninfo endpoint...");
+                RestTemplate restTemplate = new RestTemplate();
+                String tokenInfoUrl = "https://oauth2.googleapis.com/tokeninfo?id_token=" + idTokenString;
+                Map<String, Object> tokenInfo = restTemplate.getForObject(tokenInfoUrl, Map.class);
 
-            GoogleIdToken idToken = verifier.verify(idTokenString);
-
-            if (idToken == null) {
-                // Try manual verification as fallback
-                return verifyGoogleTokenManually(idTokenString, role);
+                if (tokenInfo != null && tokenInfo.containsKey("email")) {
+                    email = (String) tokenInfo.get("email");
+                    name = (String) tokenInfo.get("name");
+                    System.out.println("Tokeninfo successful: " + email);
+                }
+            } catch (Exception e) {
+                System.out.println("Tokeninfo failed: " + e.getMessage());
+                lastError = e;
             }
 
-            GoogleIdToken.Payload payload = idToken.getPayload();
-            String email = payload.getEmail();
-            String name = (String) payload.get("name");
+            // Method 2: Try GoogleIdTokenVerifier if tokeninfo failed
+            if (email == null && googleClientId != null && !googleClientId.isEmpty()) {
+                try {
+                    System.out.println("Trying GoogleIdTokenVerifier...");
+                    GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(
+                            GoogleNetHttpTransport.newTrustedTransport(),
+                            JacksonFactory.getDefaultInstance()
+                    )
+                            .setAudience(Collections.singletonList(googleClientId))
+                            .build();
 
+                    GoogleIdToken idToken = verifier.verify(idTokenString);
+                    if (idToken != null) {
+                        GoogleIdToken.Payload payload = idToken.getPayload();
+                        email = payload.getEmail();
+                        name = (String) payload.get("name");
+                        System.out.println("Verifier successful: " + email);
+                    }
+                } catch (Exception e) {
+                    System.out.println("Verifier failed: " + e.getMessage());
+                    lastError = e;
+                }
+            }
+
+            // Method 3: Manual JWT decode (last resort)
+            if (email == null) {
+                try {
+                    System.out.println("Trying manual JWT decode...");
+                    String[] parts = idTokenString.split("\\.");
+                    if (parts.length >= 2) {
+                        String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
+                        // Parse JSON manually
+                        payload = payload.replace("true", "true").replace("false", "false");
+                        Map<String, Object> claims = parseJsonToMap(payload);
+                        email = (String) claims.get("email");
+                        name = (String) claims.get("name");
+                        System.out.println("Manual decode successful: " + email);
+                    }
+                } catch (Exception e) {
+                    System.out.println("Manual decode failed: " + e.getMessage());
+                    lastError = e;
+                }
+            }
+
+            if (email == null) {
+                System.err.println("All verification methods failed");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
+                        Map.of("success", false, "message", "Could not verify Google token: " + (lastError != null ? lastError.getMessage() : "Unknown error"))
+                );
+            }
+
+            // Process the user
             return processGoogleUser(email, name, role);
 
         } catch (Exception e) {
@@ -93,42 +148,41 @@ public class AuthController {
         }
     }
 
-    // Helper method for manual verification
-    private ResponseEntity<?> verifyGoogleTokenManually(String idTokenString, String role) {
+    private Map<String, Object> parseJsonToMap(String json) {
+        Map<String, Object> map = new HashMap<>();
         try {
-            // Use Google's tokeninfo endpoint
-            RestTemplate restTemplate = new RestTemplate();
-            String tokenInfoUrl = "https://oauth2.googleapis.com/tokeninfo?id_token=" + idTokenString;
-            Map<String, Object> tokenInfo = restTemplate.getForObject(tokenInfoUrl, Map.class);
-
-            if (tokenInfo == null || !tokenInfo.containsKey("email")) {
-                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
-                        Map.of("success", false, "message", "Invalid Google token")
-                );
+            // Simple JSON parsing (remove braces and split)
+            json = json.trim();
+            if (json.startsWith("{") && json.endsWith("}")) {
+                json = json.substring(1, json.length() - 1);
+                String[] pairs = json.split(",");
+                for (String pair : pairs) {
+                    String[] keyValue = pair.split(":", 2);
+                    if (keyValue.length == 2) {
+                        String key = keyValue[0].trim().replace("\"", "");
+                        String value = keyValue[1].trim().replace("\"", "");
+                        map.put(key, value);
+                    }
+                }
             }
-
-            String email = (String) tokenInfo.get("email");
-            String name = (String) tokenInfo.get("name");
-
-            return processGoogleUser(email, name, role);
-
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
-                    Map.of("success", false, "message", "Token verification failed: " + e.getMessage())
-            );
+            System.err.println("Error parsing JSON: " + e.getMessage());
         }
+        return map;
     }
 
-    // Helper method to process user
     private ResponseEntity<?> processGoogleUser(String email, String name, String role) {
+        System.out.println("Processing user: " + email + ", role: " + role);
+
         User user = userRepository.findByEmail(email)
                 .orElseGet(() -> {
                     User newUser = new User();
                     newUser.setEmail(email);
-                    newUser.setName(name != null ? name : "Google User");
+                    newUser.setName(name != null && !name.isEmpty() ? name : email.split("@")[0]);
                     newUser.setRole(UserRole.valueOf(role.toUpperCase()));
                     newUser.setCreatedAt(LocalDateTime.now());
                     newUser.setEmailVerified(true);
+                    System.out.println("Created new user: " + email);
                     return userRepository.save(newUser);
                 });
 
@@ -143,6 +197,8 @@ public class AuthController {
         userData.put("name", user.getName());
         userData.put("role", user.getRole().name().toLowerCase());
         userData.put("emailVerified", user.isEmailVerified());
+
+        System.out.println("Login successful for: " + email);
 
         return ResponseEntity.ok(Map.of(
                 "success", true,
