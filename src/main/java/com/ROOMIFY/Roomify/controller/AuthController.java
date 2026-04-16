@@ -23,6 +23,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -48,9 +49,9 @@ public class AuthController {
     @PostMapping("/google")
     @Transactional
     public ResponseEntity<?> googleLogin(@RequestBody Map<String, String> request) {
-
         try {
             String idTokenString = request.get("idToken");
+            String role = request.get("role");
 
             if (idTokenString == null || idTokenString.isBlank()) {
                 return ResponseEntity.badRequest().body(
@@ -58,71 +59,98 @@ public class AuthController {
                 );
             }
 
+            // Accept both Android and Web client IDs
+            List<String> validAudiences = Arrays.asList(
+                    "1041914574744-dukeu8n2rdaqtlrbuq2mile0qkba726o.apps.googleusercontent.com", // Android
+                    "1041914574744-evaa3p91lu43jr5crr42esqrivkha66m.apps.googleusercontent.com"  // Web
+            );
+
             GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(
                     GoogleNetHttpTransport.newTrustedTransport(),
                     JacksonFactory.getDefaultInstance()
             )
-                    .setAudience(Collections.singletonList(googleClientId)) // MUST MATCH WEB CLIENT ID
+                    .setAudience(validAudiences) // Now accepts both
                     .build();
 
             GoogleIdToken idToken = verifier.verify(idTokenString);
 
             if (idToken == null) {
+                // Try manual verification as fallback
+                return verifyGoogleTokenManually(idTokenString, role);
+            }
+
+            GoogleIdToken.Payload payload = idToken.getPayload();
+            String email = payload.getEmail();
+            String name = (String) payload.get("name");
+
+            return processGoogleUser(email, name, role);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
+                    Map.of("success", false, "message", "Google login failed: " + e.getMessage())
+            );
+        }
+    }
+
+    // Helper method for manual verification
+    private ResponseEntity<?> verifyGoogleTokenManually(String idTokenString, String role) {
+        try {
+            // Use Google's tokeninfo endpoint
+            RestTemplate restTemplate = new RestTemplate();
+            String tokenInfoUrl = "https://oauth2.googleapis.com/tokeninfo?id_token=" + idTokenString;
+            Map<String, Object> tokenInfo = restTemplate.getForObject(tokenInfoUrl, Map.class);
+
+            if (tokenInfo == null || !tokenInfo.containsKey("email")) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
                         Map.of("success", false, "message", "Invalid Google token")
                 );
             }
 
-            GoogleIdToken.Payload payload = idToken.getPayload();
+            String email = (String) tokenInfo.get("email");
+            String name = (String) tokenInfo.get("name");
 
-            String email = payload.getEmail();
-            String name = (String) payload.get("name");
-
-            if (email == null || email.isBlank()) {
-                return ResponseEntity.badRequest().body(
-                        Map.of("success", false, "message", "Email not found in Google token")
-                );
-            }
-
-            User user = userRepository.findByEmail(email)
-                    .orElseGet(() -> {
-                        User newUser = new User();
-                        newUser.setEmail(email);
-                        newUser.setName(name != null ? name : "Google User");
-                        newUser.setRole(UserRole.USER);
-                        newUser.setCreatedAt(LocalDateTime.now());
-                        newUser.setEmailVerified(true);
-                        return userRepository.save(newUser);
-                    });
-
-            user.setLastLoginAt(LocalDateTime.now());
-            user = userRepository.save(user);
-
-            String jwt = jwtUtil.generateToken(user.getEmail());
-
-            Map<String, Object> userData = new HashMap<>();
-            userData.put("id", user.getId());
-            userData.put("email", user.getEmail());
-            userData.put("name", user.getName());
-            userData.put("role", user.getRole().name().toLowerCase());
-
-            return ResponseEntity.ok(Map.of(
-                    "success", true,
-                    "token", jwt,
-                    "user", userData
-            ));
+            return processGoogleUser(email, name, role);
 
         } catch (Exception e) {
-            e.printStackTrace();
-
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
-                    Map.of(
-                            "success", false,
-                            "message", "Google login failed: " + e.getMessage()
-                    )
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
+                    Map.of("success", false, "message", "Token verification failed: " + e.getMessage())
             );
         }
     }
+
+    // Helper method to process user
+    private ResponseEntity<?> processGoogleUser(String email, String name, String role) {
+        User user = userRepository.findByEmail(email)
+                .orElseGet(() -> {
+                    User newUser = new User();
+                    newUser.setEmail(email);
+                    newUser.setName(name != null ? name : "Google User");
+                    newUser.setRole(UserRole.valueOf(role.toUpperCase()));
+                    newUser.setCreatedAt(LocalDateTime.now());
+                    newUser.setEmailVerified(true);
+                    return userRepository.save(newUser);
+                });
+
+        user.setLastLoginAt(LocalDateTime.now());
+        user = userRepository.save(user);
+
+        String jwt = jwtUtil.generateToken(user.getEmail());
+
+        Map<String, Object> userData = new HashMap<>();
+        userData.put("id", user.getId());
+        userData.put("email", user.getEmail());
+        userData.put("name", user.getName());
+        userData.put("role", user.getRole().name().toLowerCase());
+        userData.put("emailVerified", user.isEmailVerified());
+
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "token", jwt,
+                "user", userData
+        ));
+    }
+
 
     @PostMapping("/api/auth/save-fcm-token")
     public ResponseEntity<ApiResponse<Void>> saveFcmToken(
