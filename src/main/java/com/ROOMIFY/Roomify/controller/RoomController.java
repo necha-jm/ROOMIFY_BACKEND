@@ -45,13 +45,16 @@ public class RoomController {
     @Transactional
     public ResponseEntity<?> addRoom(@RequestBody Room room) {
         try {
+            // Log incoming data
+            System.out.println("Received room: " + room);
+            System.out.println("PostedBy: " + room.getPostedBy());
 
             // 🔐 SAFETY CHECK
             if (room == null) {
                 return ResponseEntity.badRequest().body("Room is null");
             }
 
-            // ================= DEFAULT VALUES =================
+            // ================= EXPLICITLY SET ALL DEFAULT VALUES =================
             if (room.getCreatedAt() == null) {
                 room.setCreatedAt(LocalDateTime.now());
             }
@@ -80,24 +83,64 @@ public class RoomController {
                 room.setImages(new ArrayList<>());
             }
 
+            // CRITICAL: Set isAvailable explicitly
+            room.setAvailable(true);
+
+            // CRITICAL: Set bookingsCount
+            if (room.getBookingsCount() == 0) {
+                room.setBookingsCount(0);
+            }
+
+            // CRITICAL: Set imageCount
+            if (room.getImageCount() == 0 && room.getImages() != null) {
+                room.setImageCount(room.getImages().size());
+            }
+
+            // CRITICAL: Set media flags
+            room.setHasVideo(room.isHasVideo());
+            room.setHasContract(room.isHasContract());
+
+            // VALIDATE required fields
             if (room.getPostedBy() == null) {
+                System.err.println("ERROR: postedBy is null");
                 return ResponseEntity
                         .status(HttpStatus.BAD_REQUEST)
                         .body("postedBy is required");
             }
 
-            room.setAvailable(true);
+            if (room.getTitle() == null || room.getTitle().isEmpty()) {
+                return ResponseEntity
+                        .status(HttpStatus.BAD_REQUEST)
+                        .body("title is required");
+            }
+
+            if (room.getContactPhone() == null || room.getContactPhone().isEmpty()) {
+                return ResponseEntity
+                        .status(HttpStatus.BAD_REQUEST)
+                        .body("contactPhone is required");
+            }
 
             // ================= SAVE =================
+            System.out.println("Attempting to save room with postedBy: " + room.getPostedBy());
             Room saved = repo.save(room);
+            System.out.println("Room saved successfully with ID: " + saved.getId());
 
             return ResponseEntity.ok(saved);
 
         } catch (Exception e) {
-            e.printStackTrace(); // 🔥 THIS WILL SHOW REAL ERROR IN LOGCAT
+            System.err.println("ERROR SAVING ROOM: " + e.getMessage());
+            e.printStackTrace(); // This will show in Render logs
+
+            // Get the root cause
+            Throwable rootCause = e;
+            while (rootCause.getCause() != null && rootCause.getCause() != rootCause) {
+                rootCause = rootCause.getCause();
+            }
+            System.err.println("Root cause: " + rootCause.getMessage());
+
             return ResponseEntity
                     .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(e.getMessage());
+                    .body("Error: " + rootCause.getMessage());
         }
     }
 
