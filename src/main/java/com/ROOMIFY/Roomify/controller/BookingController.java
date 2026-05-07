@@ -18,7 +18,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestController
@@ -38,6 +40,12 @@ public class BookingController {
     @PostMapping
     public ResponseEntity<ApiResponse<BookingResponseDTO>> createBooking(@RequestBody BookingRequestDto bookingRequest) {
         try {
+            // FIRST: Check if room already has an ACTIVE booking
+            if (bookingRepository.existsActiveBookingByRoomId(bookingRequest.getRoomId())) {
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(new ApiResponse<>(false, null, "Room already has an active booking"));
+            }
+
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
             LocalDate startLocalDate = LocalDate.parse(bookingRequest.getStartDate(), formatter);
             LocalDate endLocalDate = LocalDate.parse(bookingRequest.getEndDate(), formatter);
@@ -95,7 +103,6 @@ public class BookingController {
     @GetMapping("/owner/{ownerId}")
     public ResponseEntity<ApiResponse<List<BookingResponseDTO>>> getOwnerBookings(@PathVariable Long ownerId) {
         try {
-            // Use findByPostedBy - this is the correct method for your Room entity
             List<Room> rooms = roomRepository.findByPostedBy(ownerId);
 
             List<BookingResponseDTO> allBookings = new ArrayList<>();
@@ -133,6 +140,94 @@ public class BookingController {
             return ResponseEntity.ok(new ApiResponse<>(true, new ArrayList<>(), "No bookings found"));
         }
     }
+
+    // ========== NEW ENDPOINTS FOR CONSISTENCY ==========
+
+    // Check if room has ANY booking (by ANY user)
+    @GetMapping("/room/{roomId}/exists")
+    public ResponseEntity<ApiResponse<Boolean>> isRoomBooked(@PathVariable Long roomId) {
+        try {
+            boolean hasAnyBooking = bookingRepository.existsAnyBookingByRoomId(roomId);
+            return ResponseEntity.ok(new ApiResponse<>(true, hasAnyBooking,
+                    hasAnyBooking ? "Room has bookings" : "Room has no bookings"));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, false, "Error checking room: " + e.getMessage()));
+        }
+    }
+
+    // Check if room has ACTIVE booking (ACCEPTED/CONFIRMED)
+    @GetMapping("/room/{roomId}/active-exists")
+    public ResponseEntity<ApiResponse<Boolean>> isRoomActiveBooking(@PathVariable Long roomId) {
+        try {
+            boolean hasActiveBooking = bookingRepository.existsActiveBookingByRoomId(roomId);
+            return ResponseEntity.ok(new ApiResponse<>(true, hasActiveBooking,
+                    hasActiveBooking ? "Room has active booking" : "Room has no active booking"));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, false, "Error checking room: " + e.getMessage()));
+        }
+    }
+
+    // Get count of ALL bookings for a room
+    @GetMapping("/room/{roomId}/count")
+    public ResponseEntity<ApiResponse<Integer>> getRoomBookingsCount(@PathVariable Long roomId) {
+        try {
+            int count = bookingRepository.countAllBookingsByRoomId(roomId);
+            return ResponseEntity.ok(new ApiResponse<>(true, count, "Count retrieved successfully"));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, 0, "Error getting count: " + e.getMessage()));
+        }
+    }
+
+    // Get detailed room booking status (for map color logic)
+    @GetMapping("/room/{roomId}/status")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getRoomBookingStatus(@PathVariable Long roomId) {
+        try {
+            Map<String, Object> status = new HashMap<>();
+
+            // Total bookings count
+            int totalBookings = bookingRepository.countAllBookingsByRoomId(roomId);
+            status.put("totalBookings", totalBookings);
+
+            // Has any booking
+            status.put("hasAnyBooking", totalBookings > 0);
+
+            // Has active booking (ACCEPTED/CONFIRMED)
+            boolean hasActiveBooking = bookingRepository.existsActiveBookingByRoomId(roomId);
+            status.put("hasActiveBooking", hasActiveBooking);
+
+            // Count by status
+            status.put("pendingCount", bookingRepository.countBookingsByRoomIdAndStatus(roomId, "PENDING"));
+            status.put("acceptedCount", bookingRepository.countBookingsByRoomIdAndStatus(roomId, "ACCEPTED"));
+            status.put("confirmedCount", bookingRepository.countBookingsByRoomIdAndStatus(roomId, "CONFIRMED"));
+            status.put("rejectedCount", bookingRepository.countBookingsByRoomIdAndStatus(roomId, "REJECTED"));
+            status.put("cancelledCount", bookingRepository.countBookingsByRoomIdAndStatus(roomId, "CANCELLED"));
+
+            return ResponseEntity.ok(new ApiResponse<>(true, status, "Status retrieved successfully"));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, null, "Error getting status: " + e.getMessage()));
+        }
+    }
+
+    // Check if room has booking by other users (for new user login)
+    @GetMapping("/room/{roomId}/other-user-booking")
+    public ResponseEntity<ApiResponse<Boolean>> hasOtherUserBooking(
+            @PathVariable Long roomId,
+            @RequestParam Long currentUserId) {
+        try {
+            boolean hasOtherBooking = bookingRepository.existsOtherUserBooking(roomId, currentUserId);
+            return ResponseEntity.ok(new ApiResponse<>(true, hasOtherBooking,
+                    hasOtherBooking ? "Room booked by other user" : "No other user bookings"));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, false, "Error checking: " + e.getMessage()));
+        }
+    }
+
+    // ========== EXISTING ENDPOINTS ==========
 
     @PutMapping("/{bookingId}/accept")
     public ResponseEntity<ApiResponse<BookingResponseDTO>> acceptBooking(@PathVariable Long bookingId) {
